@@ -3,6 +3,13 @@
 
 Все настройки читаются из .env.
 API-ключи и токены НЕ должны храниться в коде.
+
+Особенности:
+- TELEGRAM_BOT_TOKEN и DATABASE_URL обязательны всегда;
+- YANDEX_API_KEY / YANDEX_FOLDER_ID можно оставить пустыми
+  на этапе, пока YandexGPT ещё не подключён;
+- ADMIN_IDS парсится из строки "111,222" или "111 222";
+- DATABASE_URL автоматически приводится к async-драйверу asyncpg.
 """
 
 from __future__ import annotations
@@ -24,10 +31,10 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # ===== Telegram =====
+    # ===== Telegram (обязательно) =====
     telegram_bot_token: str = Field(..., alias="TELEGRAM_BOT_TOKEN")
 
-    # ===== YandexGPT =====
+    # ===== YandexGPT (необязательно на этапе 2-3) =====
     yandex_api_key: str = Field("", alias="YANDEX_API_KEY")
     yandex_folder_id: str = Field("", alias="YANDEX_FOLDER_ID")
     yandex_model: str = Field("yandexgpt-lite", alias="YANDEX_MODEL")
@@ -37,7 +44,7 @@ class Settings(BaseSettings):
     )
     yandex_timeout: int = Field(60, alias="YANDEX_TIMEOUT")
 
-    # ===== База данных =====
+    # ===== База данных (обязательно) =====
     database_url: str = Field(..., alias="DATABASE_URL")
 
     # ===== Администраторы =====
@@ -62,6 +69,9 @@ class Settings(BaseSettings):
     log_level: str = Field("INFO", alias="LOG_LEVEL")
     environment: str = Field("development", alias="ENVIRONMENT")
 
+    # ========================================================
+    #  Валидаторы
+    # ========================================================
     @field_validator("admin_ids", mode="before")
     @classmethod
     def parse_admin_ids(cls, value):
@@ -77,15 +87,74 @@ class Settings(BaseSettings):
             return [value]
         return value
 
+    @field_validator("database_url", mode="before")
+    @classmethod
+    def normalize_database_url(cls, value):
+        """
+        Приводит строку подключения к async-драйверу asyncpg.
+
+        BotHost часто даёт URL без указания драйвера:
+            postgresql://...
+            postgres://...
+        SQLAlchemy тогда берёт psycopg2 (sync), которого нет.
+
+        Автоматически заменяем префикс на postgresql+asyncpg://.
+        """
+        if not isinstance(value, str):
+            return value
+        url = value.strip()
+        if url.startswith("postgres://"):
+            return "postgresql+asyncpg://" + url[len("postgres://"):]
+        if url.startswith("postgresql://"):
+            return "postgresql+asyncpg://" + url[len("postgresql://"):]
+        return url
+
+    # ========================================================
+    #  Свойства
+    # ========================================================
     @property
     def is_production(self) -> bool:
         return self.environment.lower() == "production"
 
+    @property
+    def yandex_configured(self) -> bool:
+        """YandexGPT настроен? Нужно ли использовать AI."""
+        return bool(self.yandex_api_key and self.yandex_folder_id)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Синглтон настроек — читаем .env один раз за запуск."""
-    return Settings()
+    """
+    Синглтон настроек.
+
+    Если чего-то не хватает — выдаём понятное сообщение
+    вместо длинного traceback от pydantic.
+    """
+    try:
+        return Settings()
+    except Exception as exc:
+        import os
+
+        missing = []
+        for name in ("TELEGRAM_BOT_TOKEN", "DATABASE_URL"):
+            if not os.environ.get(name):
+                missing.append(name)
+
+        hint = (
+            "\n\nПроверьте переменные окружения на BotHost.\n"
+            "Обязательно должны быть заданы:\n"
+            "  TELEGRAM_BOT_TOKEN\n"
+            "  DATABASE_URL\n\n"
+            "Необязательные, но нужные позже (для YandexGPT):\n"
+            "  YANDEX_API_KEY\n"
+            "  YANDEX_FOLDER_ID\n"
+        )
+        if missing:
+            hint = (
+                f"\n\nНе заданы обязательные переменные: {', '.join(missing)}"
+                + hint
+            )
+        raise RuntimeError(f"Ошибка конфигурации: {exc}{hint}") from exc
 
 
 settings = get_settings()
