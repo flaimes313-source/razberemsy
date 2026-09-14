@@ -28,7 +28,6 @@ def setup_logging() -> None:
     root = logging.getLogger()
     root.setLevel(level)
 
-    # Убираем возможные дубли при повторной инициализации
     for handler in list(root.handlers):
         root.removeHandler(handler)
 
@@ -37,7 +36,6 @@ def setup_logging() -> None:
     handler.setFormatter(logging.Formatter(LOG_FORMAT, datefmt=DATE_FORMAT))
     root.addHandler(handler)
 
-    # Приглушаем слишком болтливые библиотеки
     logging.getLogger("aiogram").setLevel(logging.INFO)
     logging.getLogger("aiogram.event").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)

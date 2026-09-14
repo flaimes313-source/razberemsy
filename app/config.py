@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     telegram_bot_token: str = Field(..., alias="TELEGRAM_BOT_TOKEN")
 
     # ===== YandexGPT =====
-    yandex_api_key: str = Field(..., alias="YANDEX_API_KEY")
-    yandex_folder_id: str = Field(..., alias="YANDEX_FOLDER_ID")
+    yandex_api_key: str = Field("", alias="YANDEX_API_KEY")
+    yandex_folder_id: str = Field("", alias="YANDEX_FOLDER_ID")
     yandex_model: str = Field("yandexgpt-lite", alias="YANDEX_MODEL")
     yandex_api_url: str = Field(
         "https://llm.api.cloud.yandex.net/foundationModels/v1/completion",

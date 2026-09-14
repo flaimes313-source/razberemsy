@@ -1,43 +1,48 @@
 """
 Точка входа приложения «Разберёмся».
 
-Схема (по ТЗ):
-    main.py
-      ↓
-    загрузка config
-      ↓
-    подключение БД      (появится на этапе 2)
-      ↓
-    создание Bot
-      ↓
-    регистрация handlers
-      ↓
-    запуск
+Порядок:
+    1. настройка логирования
+    2. инициализация БД (создание таблиц, если их нет)
+    3. создание Bot и Dispatcher
+    4. регистрация команд
+    5. запуск polling
+    6. корректное закрытие при остановке
 """
 
 from __future__ import annotations
 
 import asyncio
 
-from app.config import settings
+from app.bot.bot import create_bot, create_dispatcher
+from app.bot.commands import set_bot_commands
+from app.database.database import close_db, init_db
 from app.logging_config import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
 
 async def run() -> None:
-    """Запуск приложения."""
     logger.info("Запуск проекта «Разберёмся»…")
-    logger.info("Окружение: %s", settings.environment)
 
-    # На следующих этапах здесь появится:
-    #   1. инициализация БД
-    #   2. создание Bot и Dispatcher
-    #   3. регистрация handlers
-    #   4. запуск polling
-    #   5. запуск health-сервера FastAPI
+    # 1. БД
+    await init_db()
 
-    logger.info("Каркас проекта успешно инициализирован.")
+    # 2. Bot и Dispatcher
+    bot = create_bot()
+    dp = create_dispatcher()
+
+    # 3. Команды
+    await set_bot_commands(bot)
+
+    # 4. Polling
+    try:
+        logger.info("Бот запущен, начинаю polling.")
+        await dp.start_polling(bot)
+    finally:
+        await bot.session.close()
+        await close_db()
+        logger.info("Бот остановлен.")
 
 
 def main() -> None:
