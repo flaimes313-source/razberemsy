@@ -4,6 +4,11 @@
 Пользователь может:
 - нажать кнопку «📸 Фото» и отправить фото;
 - отправить фото напрямую без нажатия кнопки.
+
+Распознавание текста:
+    1. Yandex Vision OCR (приоритет, работает везде);
+    2. tesseract (если установлен локально);
+    3. честный отказ.
 """
 
 from __future__ import annotations
@@ -27,7 +32,7 @@ from app.services.message_service import (
     save_assistant_message,
     save_user_message,
 )
-from app.services.photo_service import ocr_available, recognize_text
+from app.services.photo_service import recognize_text_async
 from app.utils.files import download_telegram_file, safe_delete
 from app.logging_config import get_logger
 
@@ -61,21 +66,13 @@ async def on_photo(message: Message, state: FSMContext) -> None:
         )
         return
 
-    if not ocr_available():
-        await message.answer(
-            "📸 Фото получил, но сейчас не могу распознать на нём текст.\n\n"
-            "Можешь описать ситуацию словами — я разберусь."
-        )
-        return
-
-    await message.answer("📸 Фото получил.\n\n🔎 Разбираюсь…")
-    await message.bot.send_chat_action(message.chat.id, "typing")
-
-    # Самая крупная версия фото
     photo = message.photo[-1] if message.photo else None
     if photo is None:
         await message.answer("Не удалось получить фото.")
         return
+
+    await message.answer("📸 Фото получил.\n\n🔎 Разбираюсь…")
+    await message.bot.send_chat_action(message.chat.id, "typing")
 
     tmp_path = None
     try:
@@ -85,7 +82,7 @@ async def on_photo(message: Message, state: FSMContext) -> None:
             suffix=".jpg",
         )
 
-        recognized = recognize_text(tmp_path)
+        recognized = await recognize_text_async(tmp_path)
 
         if not recognized:
             await message.answer(
@@ -97,7 +94,6 @@ async def on_photo(message: Message, state: FSMContext) -> None:
             )
             return
 
-        # Сохраняем как обычный текстовый запрос в БД
         async with AsyncSessionLocal() as session:
             user = await get_or_create_user(
                 session,
@@ -112,11 +108,11 @@ async def on_photo(message: Message, state: FSMContext) -> None:
                 title="Фото",
                 category="OTHER",
             )
-            await save_user_message(
-                session, conv.id, recognized, "photo"
-            )
+            await save_user_message(session, conv.id, recognized, "photo")
 
-            system_prompt = build_system_prompt("OTHER") + "\n\n" + PHOTO_SYSTEM_ADDON
+            system_prompt = (
+                build_system_prompt("OTHER") + "\n\n" + PHOTO_SYSTEM_ADDON
+            )
             user_message = build_user_message(
                 user_text=recognized,
                 memory=None,
