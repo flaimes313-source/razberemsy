@@ -2,7 +2,7 @@
 Клиент YandexGPT.
 
 Отправляет запрос к API Yandex Cloud Foundation Models.
-Возвращает сырой текст ответа (ожидается JSON-строка).
+Возвращает текст ответа + метрики (tokens, model).
 
 Особенности:
 - timeout из .env;
@@ -13,7 +13,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
+from dataclasses import dataclass
 from typing import Any, Optional
 
 import httpx
@@ -26,6 +26,16 @@ logger = get_logger(__name__)
 
 class YandexGPTError(Exception):
     """Ошибка при обращении к YandexGPT."""
+
+
+@dataclass
+class CompletionResult:
+    """Результат запроса к YandexGPT."""
+    text: str
+    model: str
+    tokens_input: int = 0
+    tokens_output: int = 0
+    tokens_total: int = 0
 
 
 class YandexGPT:
@@ -42,6 +52,10 @@ class YandexGPT:
     def configured(self) -> bool:
         return bool(self._api_key and self._folder_id)
 
+    @property
+    def model_name(self) -> str:
+        return self._model
+
     def _headers(self) -> dict[str, str]:
         return {
             "Authorization": f"Api-Key {self._api_key}",
@@ -52,10 +66,9 @@ class YandexGPT:
         self,
         system_prompt: str,
         user_message: str,
-        temperature: float = 0.3,
-        max_tokens: int = 2000,
+        temperature: float,
+        max_tokens: int,
     ) -> dict[str, Any]:
-        # Модель указывается в формате gpt://<folder_id>/<model>/<version>
         model_uri = f"gpt://{self._folder_id}/{self._model}/latest"
         return {
             "modelUri": model_uri,
@@ -77,9 +90,9 @@ class YandexGPT:
         temperature: float = 0.3,
         max_tokens: int = 2000,
         retries: int = 2,
-    ) -> str:
+    ) -> CompletionResult:
         """
-        Отправить запрос и вернуть текст ответа модели.
+        Отправить запрос и вернуть текст + метрики.
 
         При таймауте или 5xx — повторить запрос (до `retries` раз).
         """
@@ -95,7 +108,7 @@ class YandexGPT:
 
         last_exc: Optional[Exception] = None
 
-        for attempt in range(1, retries + 2):  # 1 + retries
+        for attempt in range(1, retries + 2):
             try:
                 async with httpx.AsyncClient(timeout=self._timeout) as client:
                     response = await client.post(
@@ -105,23 +118,27 @@ class YandexGPT:
                     )
 
                 if response.status_code >= 500:
-                    raise YandexGPTError(
-                        f"YandexGPT 5xx: {response.status_code}"
-                    )
+                    raise YandexGPTError(f"YandexGPT 5xx: {response.status_code}")
 
                 if response.status_code != 200:
-                    # 4xx — обычно конфиг/ключи, повторять нет смысла
-                    logger.error(
-                        "YandexGPT вернул %s: %s",
-                        response.status_code,
-                        response.text[:300],
-                    )
-                    raise YandexGPTError(
-                        f"YandexGPT error {response.status_code}"
-                    )
+                    snippet = response.text[:500]
+                    if "does not match with service account folder" in snippet:
+                        logger.error(
+                            "YandexGPT 400: не совпадает folder_id и сервисный аккаунт. "
+                            "Проверьте YANDEX_FOLDER_ID (должен начинаться с b1g…). "
+                            "Ответ: %s",
+                            snippet,
+                        )
+                    else:
+                        logger.error(
+                            "YandexGPT вернул %s: %s",
+                            response.status_code,
+                            snippet,
+                        )
+                    raise YandexGPTError(f"YandexGPT error {response.status_code}")
 
                 data = response.json()
-                return self._extract_text(data)
+                return self._extract_result(data)
 
             except (httpx.TimeoutException, httpx.TransportError) as exc:
                 last_exc = exc
@@ -138,18 +155,31 @@ class YandexGPT:
 
         raise YandexGPTError(f"YandexGPT не ответил: {last_exc}")
 
-    @staticmethod
-    def _extract_text(data: dict[str, Any]) -> str:
-        """Достать текст ответа из структуры YandexGPT."""
+    def _extract_result(self, data: dict[str, Any]) -> CompletionResult:
+        """Достать текст и метрики из ответа YandexGPT."""
         try:
-            alternatives = data["result"]["alternatives"]
+            result = data["result"]
+            alternatives = result["alternatives"]
             message = alternatives[0]["message"]["text"]
         except (KeyError, IndexError, TypeError) as exc:
             raise YandexGPTError("Некорректный ответ YandexGPT") from exc
-        return message.strip()
+
+        usage = result.get("usage") or {}
+        tokens_input = int(usage.get("inputTextTokens", 0) or 0)
+        tokens_output = int(usage.get("completionTokens", 0) or 0)
+        tokens_total = int(
+            usage.get("totalTokens", tokens_input + tokens_output) or 0
+        )
+
+        return CompletionResult(
+            text=message.strip(),
+            model=self._model,
+            tokens_input=tokens_input,
+            tokens_output=tokens_output,
+            tokens_total=tokens_total,
+        )
 
 
-# Синглтон — создаётся один раз
 _yandex_client: Optional[YandexGPT] = None
 
 

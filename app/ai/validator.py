@@ -33,6 +33,8 @@ class AIAnswer:
     reply_text: Optional[str] = None
     followup_question: Optional[str] = None
     raw: str = ""
+    tokens_total: int = 0
+    model: str = ""
 
 
 def _try_parse(raw: str) -> Optional[dict[str, Any]]:
@@ -40,7 +42,6 @@ def _try_parse(raw: str) -> Optional[dict[str, Any]]:
     if not text:
         return None
 
-    # уберём markdown-обёртку ```json ... ```
     if text.startswith("```"):
         text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
         text = re.sub(r"\n?```$", "", text)
@@ -67,7 +68,12 @@ def _normalize_list(value: Any) -> list[str]:
     return []
 
 
-def _to_answer(data: dict[str, Any], raw: str) -> AIAnswer:
+def _to_answer(
+    data: dict[str, Any],
+    raw: str,
+    tokens_total: int,
+    model: str,
+) -> AIAnswer:
     return AIAnswer(
         summary=str(data.get("summary") or "").strip(),
         risks=_normalize_list(data.get("risks")),
@@ -78,6 +84,8 @@ def _to_answer(data: dict[str, Any], raw: str) -> AIAnswer:
         followup_question=(str(data["followup_question"]).strip()
                            if data.get("followup_question") else None),
         raw=raw,
+        tokens_total=tokens_total,
+        model=model,
     )
 
 
@@ -92,25 +100,32 @@ async def get_structured_answer(
     Никогда не бросает наружу — всегда возвращает AIAnswer.
     """
     raw = ""
+    tokens_total = 0
+    model = client.model_name
+
     try:
-        raw = await client.complete(
+        result = await client.complete(
             system_prompt=system_prompt,
             user_message=user_message,
             temperature=0.3,
             max_tokens=2000,
         )
+        raw = result.text
+        tokens_total = result.tokens_total
+        model = result.model
     except YandexGPTError as exc:
         logger.error("YandexGPT недоступен: %s", exc)
         return AIAnswer(
             summary="Не получилось обработать запрос. "
                     "Попробуйте, пожалуйста, ещё раз.",
+            model=model,
         )
 
     parsed = _try_parse(raw)
     if parsed:
-        return _to_answer(parsed, raw)
+        return _to_answer(parsed, raw, tokens_total, model)
 
-    # 1 ретрай: попросим модель вернуть корректный JSON
+    # 1 ретрай
     logger.warning("Некорректный JSON от YandexGPT, пробуем ретрай")
     retry_user = (
         user_message
@@ -118,23 +133,30 @@ async def get_structured_answer(
         "без markdown-обёрток и пояснений."
     )
     try:
-        raw2 = await client.complete(
+        result2 = await client.complete(
             system_prompt=system_prompt,
             user_message=retry_user,
             temperature=0.0,
             max_tokens=2000,
         )
+        raw2 = result2.text
+        tokens_total += result2.tokens_total
     except YandexGPTError as exc:
         logger.error("Повторный запрос тоже неудачен: %s", exc)
         return AIAnswer(
             summary="Не получилось обработать запрос. "
                     "Попробуйте, пожалуйста, ещё раз.",
+            model=model,
         )
 
     parsed2 = _try_parse(raw2)
     if parsed2:
-        return _to_answer(parsed2, raw2)
+        return _to_answer(parsed2, raw2, tokens_total, model)
 
-    # Fallback: отдадим сырой текст как summary
     logger.error("Fallback: не удалось получить JSON")
-    return AIAnswer(summary=raw.strip() or "Не удалось разобрать ответ.", raw=raw)
+    return AIAnswer(
+        summary=raw.strip() or "Не удалось разобрать ответ.",
+        raw=raw,
+        tokens_total=tokens_total,
+        model=model,
+    )

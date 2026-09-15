@@ -81,7 +81,7 @@ _LOCAL_RULES: list[tuple[str, tuple[str, ...]]] = [
     )),
     ("MONEY", (
         "кредит", "ипотек", "процент", "вклад", "инвестиц",
-        "взнос", "платеж", "рассрочк", "долг", "переплат", "процент",
+        "взнос", "платеж", "рассрочк", "долг", "переплат",
     )),
     ("FAMILY", (
         "жена", "муж", "ребен", "ребён", "семья", "развод",
@@ -93,7 +93,7 @@ _LOCAL_RULES: list[tuple[str, tuple[str, ...]]] = [
     )),
     ("TECH", (
         "телефон", "компьютер", "ноутбук", "windows", "андроид",
-        "android", "iphone", "iphone", "приложени", "роутер",
+        "android", "iphone", "приложени", "роутер",
         "wi-fi", "wifi", "интернет", "сайт", "программ",
     )),
     ("HEALTH", (
@@ -151,7 +151,7 @@ async def _ai_route(text: str, client: YandexGPT) -> Optional[RouteResult]:
     if not client.configured:
         return None
     try:
-        raw = await client.complete(
+        result = await client.complete(
             system_prompt=_ROUTER_SYSTEM,
             user_message=text,
             temperature=0.0,
@@ -161,7 +161,7 @@ async def _ai_route(text: str, client: YandexGPT) -> Optional[RouteResult]:
         logger.warning("AI router недоступен: %s", exc)
         return None
 
-    data = _safe_parse_json(raw)
+    data = _safe_parse_json(result.text)
     if not data:
         return None
 
@@ -188,7 +188,6 @@ def _safe_parse_json(text: str) -> Optional[dict]:
     """Попытка вытащить JSON из ответа (на случай обёрток)."""
     text = text.strip()
     if text.startswith("```"):
-        # уберём markdown-обёртку
         text = re.sub(r"^```[a-zA-Z]*\n?", "", text)
         text = re.sub(r"\n?```$", "", text)
     try:
@@ -220,11 +219,7 @@ async def route_message(
         logger.info("Router: %s (local)", local.category)
         return local
 
-    if client is None:
-        client = None  # не создаём без надобности
-
-    # Если клиент не передан — не можем спросить AI,
-    # возвращаем то, что есть (или OTHER)
+    # Если клиент не передан — вернуть локальный результат или OTHER
     if client is None:
         if local:
             return local
