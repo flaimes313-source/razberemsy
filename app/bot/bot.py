@@ -28,19 +28,30 @@ def create_bot() -> Bot:
 
 
 def create_dispatcher() -> Dispatcher:
-    """Создать Dispatcher и зарегистрировать все роутеры."""
+    """
+    Создать Dispatcher и зарегистрировать все роутеры.
+
+    Порядок регистрации КРИТИЧЕН:
+        1) команды /start, /help, /history, /pro;
+        2) reply-кнопки и inline-кнопки (callbacks);
+        3) фото и документы — ДО обычного текста;
+        4) обычный текст (message) — ПОСЛЕДНИМ.
+    """
     dp = Dispatcher(storage=MemoryStorage())
 
-    # Порядок регистрации важен:
-    #   1) команды /start, /help и т.д.
-    #   2) обработчики кнопок
-    #   3) fallback — обычный текст
     dp.include_router(handlers_pkg.start.router)
     dp.include_router(handlers_pkg.help.router)
     dp.include_router(handlers_pkg.history.router)
     dp.include_router(handlers_pkg.subscription.router)
     dp.include_router(handlers_pkg.callbacks.router)
+
+    # Фото и документы подключаем ДО message.
+    # Если подключить после — message.router с F.text их не поймает,
+    # но правило «специфичные фильтры раньше общих» соблюдаем всегда.
+    dp.include_router(handlers_pkg.photo.router)
+    dp.include_router(handlers_pkg.document.router)
+
+    # Обычный текст — ПОСЛЕДНИМ.
     dp.include_router(handlers_pkg.message.router)
-    # photo / document пока не подключаем — добавим в этапах 9–10
 
     return dp
